@@ -203,21 +203,18 @@
     });
   }
 
-  // --- Boot sequence ---
-  (async () => {
-    try {
-      await waitForServices(["SBCChallengeService","ClubService","StoreService"]);
-      createGUI();
-      // keep GUI/locks alive while you navigate inside web app
-      setInterval(() => {
-        if (!document.getElementById("eaToolsGUI")) createGUI();
-        if (document.querySelector(".listFUTItem")) injectLockIcons();
-      }, 1500);
-      console.log("[EA Tools] Loaded.");
-    } catch (e) {
-      console.warn("[EA Tools] Could not initialize:", e.message);
-      alert("EA Tools: services not ready. Open an SBC/Club/Store screen and click the bookmark again.");
-    }
-  })();
-
+// --- Boot sequence ---
+(async () => {
+  try {
+    await waitForServices(["SBCChallengeService","ClubService","StoreService"]);
+    createGUI();
+    setInterval(() => {
+      if (!document.getElementById("eaToolsGUI")) createGUI();
+      if (document.querySelector(".listFUTItem")) injectLockIcons();
+    }, 1500);
+    console.log("[EA Tools] Loaded.");
+  } catch (e) {
+    console.warn("[EA Tools] Could not initialize:", e.message);
+    alert("EA Tools: services not ready. Open an SBC/Club/Store screen and click the bookmark again.");
+  }
 })();
