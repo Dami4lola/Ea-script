@@ -1,16 +1,17 @@
 (function () {
   'use strict';
 
-  // --- wait until EA's internal services are loaded ---
-  function waitForServices(keys = ["SBCChallengeService","ClubService"], timeoutMs = 30000) {
-    const start = Date.now();
-    return new Promise((resolve, reject) => {
-      (function check() {
-        if (window.services && keys.every(k => services[k])) return resolve();
-        if (Date.now() - start > timeoutMs) return reject(new Error("EA services not found"));
-        setTimeout(check, 400);
-      })();
-    });
+  // ---------- helpers ----------
+  function delay(ms){ return new Promise(res => setTimeout(res, ms)); }
+
+  // probe flags for EA services as they appear
+  const servicesReady = { sbc:false, club:false, store:false };
+  function probeServices() {
+    try {
+      if (window.services?.SBCChallengeService) servicesReady.sbc = true;
+      if (window.services?.ClubService)         servicesReady.club = true;
+      if (window.services?.StoreService)        servicesReady.store = true;
+    } catch (e) {}
   }
 
   // upgrade old lockedPlayers format (ids only) -> objects
@@ -24,18 +25,19 @@
   let autoRunning = false;
   let completedCount = 0;
 
-  function delay(ms){ return new Promise(res => setTimeout(res, ms)); }
-
+  // ---------- GUI ----------
   function createGUI() {
     if (document.getElementById("eaToolsGUI")) return;
+
     const gui = document.createElement("div");
     gui.id = "eaToolsGUI";
     Object.assign(gui.style, {
       position:"fixed", top:"100px", right:"20px", background:"#111", color:"#fff",
-      padding:"10px", border:"1px solid #555", zIndex:999999, fontSize:"14px", width:"240px"
+      padding:"10px", border:"1px solid #555", zIndex: 999999, fontSize:"14px", width:"240px",
+      borderRadius:"10px", boxShadow:"0 6px 20px rgba(0,0,0,.35)"
     });
     gui.innerHTML = `
-      <div>
+      <div style="display:flex; gap:6px; margin-bottom:8px;">
         <button class="tabBtn" data-tab="sbc">SBC Mode</button>
         <button class="tabBtn" data-tab="pack">Pack Mode</button>
         <button class="tabBtn" data-tab="locks">Locks</button>
@@ -50,12 +52,14 @@
       <div id="tab-pack" class="tabContent" style="display:none;">
         <button id="startPacksBtn">📦 Open All Packs</button>
       </div>
-      <div id="tab-locks" class="tabContent" style="display:none; max-height:300px; overflow-y:auto;">
+      <div id="tab-locks" class="tabContent" style="display:none; max-height:300px; overflow:auto;">
         <div id="lockedList"></div>
       </div>
+      <div id="eaToolsStatus" style="margin-top:8px; font-size:12px; color:#aaa;"></div>
     `;
     document.body.appendChild(gui);
 
+    // tab switching
     document.querySelectorAll(".tabBtn").forEach(btn => {
       btn.onclick = () => {
         document.querySelectorAll(".tabContent").forEach(t => t.style.display = "none");
@@ -63,6 +67,7 @@
       };
     });
 
+    // wire buttons
     document.getElementById("saveTemplateBtn").onclick = saveTemplate;
     document.getElementById("startAutoBtn").onclick = () => { autoRunning = true; runAuto(); };
     document.getElementById("stopAutoBtn").onclick  = () => { autoRunning = false; };
@@ -70,6 +75,13 @@
 
     updateTemplateList();
     updateLockList();
+    updateStatus();
+  }
+
+  function updateStatus(){
+    const el = document.getElementById("eaToolsStatus");
+    if (!el) return;
+    el.textContent = `Services — SBC:${servicesReady.sbc?'✔':'…'}  Club:${servicesReady.club?'✔':'…'}  Store:${servicesReady.store?'✔':'…'}`;
   }
 
   function updateTemplateList() {
@@ -93,8 +105,31 @@
     ).join("<br>");
   }
 
-  // --- SBC: save template, fill, submit, loop ---
+  // ---------- SBC: template/save/fill/submit/loop ----------
+  function guardSBC() {
+    if (!window.services?.SBCChallengeService) {
+      alert("Open any SBC challenge first (show the squad grid), then press the button again.");
+      return false;
+    }
+    return true;
+  }
+  function guardClub() {
+    if (!window.services?.ClubService) {
+      alert("Open Club → Players first so your club loads, then try again.");
+      return false;
+    }
+    return true;
+  }
+  function guardStore() {
+    if (!window.services?.StoreService) {
+      alert("Open Store → My Packs first, then press the button again.");
+      return false;
+    }
+    return true;
+  }
+
   function saveTemplate() {
+    if (!guardSBC()) return;
     try {
       const challenge = services.SBCChallengeService.getCurrentChallenge();
       const positions = challenge.getSquad().map(slot => slot.position);
@@ -109,6 +144,7 @@
   }
 
   async function runAuto() {
+    if (!guardSBC() || !guardClub()) { autoRunning = false; return; }
     const select = document.getElementById("templateSelect");
     const selectedId = select?.value;
     if (!selectedId || !templates[selectedId]) {
@@ -127,6 +163,7 @@
   }
 
   async function fillSquadFromTemplate(template) {
+    if (!guardClub()) return false;
     const clubPlayers = await services.ClubService.requestClubPlayers();
     const available = clubPlayers
       .filter(p => !p.isInSquad() && !lockedPlayers.some(lp => lp.id === p.id))
@@ -136,6 +173,7 @@
     for (let pos of template.positions) {
       const player = available.find(p => p.preferredPosition === pos);
       if (player) {
+        if (!guardSBC()) return false;
         await services.SBCChallengeService.placePlayerInSlot(template.challengeId, pos, player.id);
         await delay(400 + Math.random()*300);
         filled = true;
@@ -145,12 +183,14 @@
   }
 
   async function submitSBC() {
+    if (!guardSBC()) return;
     const challenge = services.SBCChallengeService.getCurrentChallenge();
     await services.SBCChallengeService.submitChallenge(challenge.getDefinition().id);
   }
 
-  // --- Pack opener ---
+  // ---------- Pack opener ----------
   async function openAllPacks() {
+    if (!guardStore()) return;
     console.log("[EA Tools] Opening all packs…");
     const store = services.StoreService.getStore?.();
     if (!store || !store.getUnopenedPacks) { alert("Store not available"); return; }
@@ -166,7 +206,7 @@
     alert("All packs opened!");
   }
 
-  // --- Visual locks on club cards ---
+  // ---------- Visual locks on club cards ----------
   function injectLockIcons() {
     const cards = document.querySelectorAll(".listFUTItem");
     cards.forEach(card => {
@@ -184,7 +224,7 @@
       lockBtn.className = "lockIcon";
       Object.assign(lockBtn.style, {
         position:"absolute", top:"5px", right:"5px", fontSize:"16px",
-        cursor:"pointer", zIndex:10000
+        cursor:"pointer", zIndex: 10000, userSelect:"none"
       });
       lockBtn.onclick = () => {
         if (lockedPlayers.some(lp => lp.id === playerId)) {
@@ -203,18 +243,20 @@
     });
   }
 
-// --- Boot sequence ---
-(async () => {
-  try {
-    await waitForServices(["SBCChallengeService","ClubService","StoreService"]);
-    createGUI();
-    setInterval(() => {
-      if (!document.getElementById("eaToolsGUI")) createGUI();
-      if (document.querySelector(".listFUTItem")) injectLockIcons();
-    }, 1500);
-    console.log("[EA Tools] Loaded.");
-  } catch (e) {
-    console.warn("[EA Tools] Could not initialize:", e.message);
-    alert("EA Tools: services not ready. Open an SBC/Club/Store screen and click the bookmark again.");
-  }
+  // ---------- Boot (resilient) ----------
+  createGUI();                 // show UI immediately
+  probeServices();             // first probe
+  updateStatus();
+
+  // keep GUI alive; inject locks when club list is rendered
+  setInterval(() => {
+    if (!document.getElementById("eaToolsGUI")) createGUI();
+    if (document.querySelector(".listFUTItem")) injectLockIcons();
+  }, 1500);
+
+  // keep probing for services and reflecting status
+  setInterval(() => { probeServices(); updateStatus(); }, 800);
+
+  console.log("[EA Tools] UI loaded. Navigate to SBC/Club/Store, then use the buttons.");
+
 })();
